@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sonar</title>
+<style>
+  :root { --bg:#050a06; --fg:#6dff8f; --dim:#2f7a43; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.15 ui-monospace,Menlo,Consolas,monospace; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  #top { display:flex; gap:20px; flex-wrap:wrap; }
+  pre { margin:0; white-space:pre; }
+  #art { color:var(--accent,var(--fg)); font-size:12px; line-height:1; letter-spacing:1px; }
+  #info { min-width:280px; flex:1; }
+  #title { font-weight:bold; font-size:16px; }
+  .dim { color:var(--dim); }
+  #list { margin-top:14px; border-top:1px solid var(--dim); padding-top:8px; max-height:260px; overflow:auto; }
+  .row { cursor:pointer; padding:0 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row.sel { background:var(--fg); color:var(--bg); }
+  #help { margin-top:10px; color:var(--dim); }
+  #q { background:transparent; border:0; border-bottom:1px solid var(--fg); color:var(--fg); font:inherit; outline:none; }
+</style>
+</head>
+<body>
+<main>
+  <div id="top">
+    <pre id="art" aria-label="generated ASCII album art"></pre>
+    <div id="info">
+      <div id="title"></div><div id="artist"></div><div id="album" class="dim"></div><br>
+      <pre id="bar"></pre><div id="time"></div><div id="status"></div><br>
+      <pre id="viz"></pre>
+    </div>
+  </div>
+  <div id="list"></div>
+  <div id="help">space play/pause · n/p track · ←/→ seek · +/- vol · s shuffle · r repeat · l playlists · / search · demo data, no Spotify account involved · <a style="color:inherit" href="https://github.com/otisranson/Sonar">source</a></div>
+</main>
+<script>
+const RAMP = " .,:;-=+*#%@", BARS = " ▁▂▃▄▅▆▇█";
+const A = "Neon Static Glass Velvet Orbit Halogen Marrow Tidal Cinder Lumen Sable Quartz".split(" ");
+const B = "Garden Engine Drift Signal Harbor Meridian Parade Circuit Lantern Atlas Fever Echo".split(" ");
+const ARTISTS = ["The Parallax","Lucid Cartographers","Mono Tide","Vera Halloran","Static Orchard"];
+
+function rng(seed) { let s = seed >>> 0 || 1; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+function hash(str) { let h = 2166136261; for (const c of str) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
+
+const R = rng(7), pls = [];
+["Late Night Compile","Deep Focus","Road Trip 2026","Sunday Slow"].forEach((name, i) => {
+  const tracks = [];
+  for (let j = 0; j < 12; j++) {
+    const n = A[R()*12|0] + " " + B[R()*12|0];
+    tracks.push({ id: `t${i}${j}${n}`, name: n, artist: ARTISTS[R()*5|0], album: A[R()*12|0] + " " + B[R()*12|0], dur: (150 + R()*180|0) * 1000 });
+  }
+  pls.push({ name, tracks });
+});
+const all = pls.flatMap(p => p.tracks);
+
+const S = { queue: pls[0].tracks, cur: 0, playing: false, pos: 0, vol: 70, shuf: false, rep: "off", stamp: performance.now() };
+let items = pls, kind = "playlists", title = "Playlists", ctx = null, sel = 0, searching = false;
+
+function tick() {
+  const now = performance.now();
+  if (S.playing) {
+    S.pos += now - S.stamp;
+    while (S.pos >= S.queue[S.cur].dur) { S.pos -= S.queue[S.cur].dur; advance(1, true); }
+  }
+  S.stamp = now;
+}
+function advance(d, auto) {
+  if (auto && S.rep === "track") return;
+  S.cur = S.shuf ? (Math.random() * S.queue.length | 0) : (S.cur + d + S.queue.length) % S.queue.length;
+}
+const fmt = ms => { const s = ms / 1000 | 0; return (s / 60 | 0) + ":" + String(s % 60).padStart(2, "0"); };
+
+function genArt(id) {
+  const r = rng(hash(id)), k = Array.from({ length: 4 }, () => [0.15 + r()*0.45, 0.15 + r()*0.45, r()*6.28, r()*0.8 - 0.4]);
+  const h = r(), col = [0, .33, .66].map(o => Math.round(255 * (0.5 + 0.5 * Math.sin(6.28 * (h + o)))));
+  return { k, color: `rgb(${col.map(c => Math.max(90, c)).join(",")})` };
+}
+const artCache = {};
+function renderArt(a, w, h, t) {
+  let out = "";
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const xx = x / 2; let v = 0;
+      for (const [fx, fy, ph, sp] of a.k) v += Math.sin(xx*fx + y*fy*1.3 + ph + t*sp);
+      v += Math.sin(Math.hypot(xx - w/4, y - h/2) * 0.5 - t * 0.3);
+      v = (v / 5 + 1) / 2;
+      out += RAMP[Math.min(RAMP.length - 1, v * RAMP.length | 0)];
+    }
+    out += "\n";
+  }
+  return out;
+}
+function spectrum(id, n, t, playing) {
+  const r = rng(hash(id)), amp = playing ? 1 : 0.08, out = [];
+  for (let i = 0; i < n; i++) {
+    const f = 0.8 + r()*2.2, p = r()*6.28, a = 0.3 + r()*0.7, env = 0.35 + 0.65 * Math.exp(-i / (n * 0.7));
+    const v = (Math.sin(t*f + p)*0.5 + 0.5) * (Math.sin(t*5.3 + i)*0.25 + 0.75);
+    out.push(Math.max(0, Math.min(1, v * env * a * amp)));
+  }
+  return out;
+}
+
+const $ = id => document.getElementById(id);
+function draw() {
+  tick();
+  const tr = S.queue[S.cur], t = performance.now() / 1000;
+  const a = artCache[tr.id] ||= genArt(tr.id);
+  $("art").style.setProperty("--accent", a.color);
+  $("art").textContent = renderArt(a, 56, 24, S.playing ? t : 0);
+  $("title").textContent = tr.name; $("artist").textContent = tr.artist; $("album").textContent = tr.album;
+  const bw = 48, fill = Math.round(S.pos / tr.dur * bw);
+  $("bar").textContent = "█".repeat(fill) + "░".repeat(bw - fill);
+  $("time").textContent = `${fmt(S.pos)} / ${fmt(tr.dur)}`;
+  $("status").textContent = `${S.playing ? "▶ playing" : "❚❚ paused"}   vol ${S.vol}%   shuffle ${S.shuf ? "on" : "off"}   repeat ${S.rep}`;
+  const sp = spectrum(tr.id, 48, t, S.playing), vh = 7;
+  let v = "";
+  for (let row = 0; row < vh; row++) {
+    for (const x of sp) v += BARS[Math.max(0, Math.min(8, Math.floor(x * vh * 8 - (vh - 1 - row) * 8)))];
+    v += "\n";
+  }
+  $("viz").textContent = v;
+  requestAnimationFrame(draw);
+}
+
+function renderList() {
+  const el = $("list");
+  el.innerHTML = "";
+  if (searching) {
+    const i = document.createElement("div");
+    i.innerHTML = 'search: <input id="q" autocomplete="off" spellcheck="false">';
+    el.appendChild(i);
+    const q = i.querySelector("input"); q.focus();
+    q.addEventListener("keydown", e => {
+      e.stopPropagation();
+      if (e.key === "Enter") { searching = false; search(q.value.trim()); }
+      if (e.key === "Escape") { searching = false; renderList(); }
+    });
+    return;
+  }
+  const h = document.createElement("b"); h.textContent = title; el.appendChild(h);
+  items.forEach((it, i) => {
+    const d = document.createElement("div");
+    d.className = "row" + (i === sel ? " sel" : "");
+    d.textContent = (i === sel ? "> " : "  ") + (kind === "playlists" ? it.name : `${it.name}  -  ${it.artist}  [${fmt(it.dur)}]`);
+    d.onclick = () => { sel = i; activate(); };
+    el.appendChild(d);
+    if (i === sel) d.scrollIntoView({ block: "nearest" });
+  });
+}
+function activate() {
+  const it = items[sel];
+  if (kind === "playlists") { items = it.tracks; kind = "tracks"; title = it.name; ctx = it; sel = 0; }
+  else { S.queue = ctx ? ctx.tracks : [it]; S.cur = S.queue.indexOf(it); S.pos = 0; S.playing = true; }
+  renderList();
+}
+function search(q) {
+  q = q.toLowerCase();
+  items = all.filter(t => (t.name + t.artist + t.album).toLowerCase().includes(q)).slice(0, 30);
+  kind = "tracks"; title = `Search: "${q}"`; ctx = null; sel = 0; renderList();
+}
+
+addEventListener("keydown", e => {
+  tick();
+  const k = e.key, tr = S.queue[S.cur];
+  if (k === " ") S.playing = !S.playing;
+  else if (k === "n") { advance(1); S.pos = 0; }
+  else if (k === "p") { if (S.pos > 3000) S.pos = 0; else { advance(-1); S.pos = 0; } }
+  else if (k === "ArrowRight") S.pos = Math.min(tr.dur - 1, S.pos + 5000);
+  else if (k === "ArrowLeft") S.pos = Math.max(0, S.pos - 5000);
+  else if (k === "+" || k === "=") S.vol = Math.min(100, S.vol + 5);
+  else if (k === "-") S.vol = Math.max(0, S.vol - 5);
+  else if (k === "s") S.shuf = !S.shuf;
+  else if (k === "r") S.rep = { off: "context", context: "track", track: "off" }[S.rep];
+  else if (k === "l") { items = pls; kind = "playlists"; title = "Playlists"; sel = 0; renderList(); }
+  else if (k === "/") { e.preventDefault(); searching = true; renderList(); }
+  else if (k === "ArrowDown" || k === "j") { sel = Math.min(items.length - 1, sel + 1); renderList(); }
+  else if (k === "ArrowUp" || k === "k") { sel = Math.max(0, sel - 1); renderList(); }
+  else if (k === "Enter") activate();
+  else if (k === "Backspace" && kind === "tracks" && ctx) { items = pls; kind = "playlists"; title = "Playlists"; sel = 0; renderList(); }
+  else return;
+  if (k === " " || k.startsWith("Arrow")) e.preventDefault();
+});
+
+renderList();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
