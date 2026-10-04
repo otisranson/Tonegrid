@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""sonar - a dependency-free Spotify terminal client with ASCII art.
+"""tonegrid - a dependency-free Spotify terminal client with ASCII art.
 
-    sonar login --client-id ID   authorize once (PKCE, no client secret)
-    sonar                        full-screen player
-    sonar now                    print the current track as ASCII art and exit
-    sonar --demo                 offline mock library, no account needed
+    tonegrid login --client-id ID   authorize once (PKCE, no client secret)
+    tonegrid                        full-screen player
+    tonegrid now                    print the current track as ASCII art and exit
+    tonegrid --demo                 offline mock library, no account needed
 
 Playback control needs Spotify Premium and an active device (open any
 Spotify app once). Album art uses Pillow if it is installed; otherwise the
@@ -41,7 +41,7 @@ ACCOUNTS = "https://accounts.spotify.com"
 REDIRECT = "http://127.0.0.1:8888/callback"
 SCOPES = ("user-read-playback-state user-modify-playback-state "
           "user-read-currently-playing playlist-read-private")
-CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "sonar" / "auth.json"
+CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tonegrid" / "auth.json"
 
 RAMP = " .,:;-=+*#%@"
 BARS = " ▁▂▃▄▅▆▇█"
@@ -80,7 +80,7 @@ def login(client_id):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"sonar: authorized. You can close this tab.")
+            self.wfile.write(b"tonegrid: authorized. You can close this tab.")
 
         def log_message(self, *a):
             pass
@@ -97,13 +97,13 @@ def login(client_id):
         "client_id": client_id, "code_verifier": verifier})
     _save({"client_id": client_id, "access_token": tok["access_token"],
            "refresh_token": tok["refresh_token"], "expires_at": time.time() + tok["expires_in"]})
-    print("Logged in. Run `sonar`.")
+    print("Logged in. Run `tonegrid`.")
 
 
 def access_token(force=False):
     if not CONF.exists():
-        sys.exit("Not logged in. Run: sonar login --client-id <your Spotify app client id>\n"
-                 "(or try `sonar --demo`)")
+        sys.exit("Not logged in. Run: tonegrid login --client-id <your Spotify app client id>\n"
+                 "(or try `tonegrid --demo`)")
     tok = json.loads(CONF.read_text())
     if force or tok["expires_at"] - time.time() < 60:
         new = _post_form(ACCOUNTS + "/api/token", {
@@ -607,7 +607,7 @@ class App:
                     line += BARS[max(0, min(8, int(lvl)))]
                 self.put(scr, 9 + row, x0, line, accent)
         else:
-            self.put(scr, 2, x0, "sonar", bold)
+            self.put(scr, 2, x0, "tonegrid", bold)
             self.put(scr, 4, x0, "nothing playing")
         self.put(scr, top, 0, "─" * W, curses.A_DIM)
         self.put(scr, top + 1, 1, self.list_title, bold)
@@ -666,7 +666,7 @@ def cmd_now(backend):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="sonar", description="Spotify in your terminal, in ASCII.")
+    ap = argparse.ArgumentParser(prog="tonegrid", description="Spotify in your terminal, in ASCII.")
     ap.add_argument("cmd", nargs="?", default="play", choices=["play", "now", "login", "logout"])
     ap.add_argument("--client-id", help="Spotify app client id (for `login`)")
     ap.add_argument("--demo", action="store_true", help="offline mock library")
