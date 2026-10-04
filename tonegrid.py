@@ -45,6 +45,7 @@ REDIRECT = "http://127.0.0.1:8888/callback"
 SCOPES = ("user-read-playback-state user-modify-playback-state "
           "user-read-currently-playing playlist-read-private")
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tonegrid" / "auth.json"
+RECENT = CONF.parent / "recent.json"
 
 RAMP = " .,:;-=+*#%@"
 BARS = " ▁▂▃▄▅▆▇█"
@@ -551,6 +552,10 @@ class App:
         self.sel = 0
         self.prompt = None
         self.alive = True
+        try:
+            self.recent = [q for q in json.loads(RECENT.read_text()) if isinstance(q, str)][:20]
+        except Exception:
+            self.recent = []
 
     def bg(self, fn, *a, done=None, fail=None):
         def run():
@@ -656,6 +661,13 @@ class App:
         self.bg(self.b.playlist_tracks, pl["id"], done=done, fail=fail)
 
     def search(self, q):
+        self.recent = [q] + [r for r in self.recent if r.lower() != q.lower()][:19]
+        try:
+            RECENT.parent.mkdir(parents=True, exist_ok=True)
+            RECENT.write_text(json.dumps(self.recent))
+        except OSError:
+            pass
+
         def done(tr):
             self.items, self.sel = tr, 0
             self.list_kind, self.list_title, self.list_ctx, self.back = "tracks", f'Search: "{q}"', None, None
@@ -670,6 +682,9 @@ class App:
                     self.search(q)
             elif k == 27:
                 self.prompt = None
+            elif k in (curses.KEY_UP, curses.KEY_DOWN) and self.list_kind == "recent" and self.items:
+                self.sel = max(0, min(len(self.items) - 1, self.sel + (1 if k == curses.KEY_DOWN else -1)))
+                self.prompt = self.items[self.sel]
             elif k in (127, 8, curses.KEY_BACKSPACE):
                 self.prompt = self.prompt[:-1]
             elif 32 <= k < 0x110000:
@@ -705,6 +720,8 @@ class App:
             self.open_playlists()
         elif k == ord("/"):
             self.prompt = ""
+            self.items, self.sel, self.list_kind, self.back = list(self.recent), -1, "recent", None
+            self.list_title = "Recent searches (up/down to pick, enter to search)" if self.recent else "Type a search"
         elif k in (curses.KEY_DOWN, ord("j")) and self.items:
             self.sel = min(len(self.items) - 1, self.sel + 1)
         elif k in (curses.KEY_UP, ord("k")) and self.items:
@@ -713,7 +730,9 @@ class App:
             self.back()
         elif k in (10, 13, curses.KEY_ENTER) and self.items:
             it = self.items[self.sel]
-            if self.list_kind == "playlists":
+            if self.list_kind == "recent":
+                self.search(it)
+            elif self.list_kind == "playlists":
                 self.open_tracks(it)
             else:
                 self.act(self.b.play, it, self.list_ctx)
@@ -776,7 +795,9 @@ class App:
             start = max(0, min(self.sel - rows // 2, len(self.items) - rows))
             for i, it in enumerate(self.items[start:start + rows]):
                 idx = start + i
-                if self.list_kind == "playlists":
+                if self.list_kind == "recent":
+                    label = it
+                elif self.list_kind == "playlists":
                     label = it["name"]
                 else:
                     label = f"{it['name']}  -  {it['artists']}  [{fmt_ms(it['duration_ms'])}]"
