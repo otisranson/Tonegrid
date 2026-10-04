@@ -2,6 +2,10 @@
 
 A Spotify terminal client with ASCII art. One Python file, standard library only.
 
+![Tonegrid playing in a terminal](docs/screenshot.png)
+
+*Demo mode (`--demo`): mock library, same interface as the real thing.*
+
 **Live demo (mock library, runs in your browser):** https://otisranson.github.io/Tonegrid/
 
 - Full-screen curses player: animated ASCII art, progress bar, spectrum bars, playlists, search
