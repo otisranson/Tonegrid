@@ -704,7 +704,7 @@ class App:
     def open_history(self):
         def done(tr):
             self.items, self.sel = tr, 0
-            self.list_kind, self.list_title, self.list_ctx, self.back = "tracks", "History (recently played)", None, None
+            self.list_kind, self.list_title, self.list_ctx, self.back = "history", "History (recently played)", None, None
         self.bg(self.b.history, done=done)
 
     def search(self, q):
@@ -851,6 +851,8 @@ class App:
                 idx = start + i
                 if self.list_kind == "recent":
                     label = it
+                elif self.list_kind == "history":
+                    label = f"{it['artists']}  -  {it['name']}  [{fmt_ms(it['duration_ms'])}]"
                 elif self.list_kind == "artists":
                     label = it["name"] + (f"  [{', '.join(it['genres'][:3])}]" if it["genres"] else "")
                 elif self.list_kind == "playlists":
