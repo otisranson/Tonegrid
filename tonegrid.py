@@ -43,7 +43,7 @@ API = "https://api.spotify.com/v1"
 ACCOUNTS = "https://accounts.spotify.com"
 REDIRECT = "http://127.0.0.1:8888/callback"
 SCOPES = ("user-read-playback-state user-modify-playback-state "
-          "user-read-currently-playing playlist-read-private")
+          "user-read-currently-playing user-read-recently-played playlist-read-private")
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tonegrid" / "auth.json"
 RECENT = CONF.parent / "recent.json"
 
@@ -230,6 +230,21 @@ class Spotify:
                 rows.append(norm_track(t))
         return rows
 
+    def history(self):
+        try:
+            out = self.req("GET", "/me/player/recently-played", {"limit": 50})
+        except RuntimeError as e:
+            if str(e).startswith("403"):
+                raise RuntimeError("History needs a new permission - run: tonegrid.py login --client-id <id>")
+            raise
+        seen, rows = set(), []
+        for it in out["items"]:
+            t = it.get("track")
+            if t and t["id"] not in seen:  # Spotify lists every play; show each track once
+                seen.add(t["id"])
+                rows.append(norm_track(t))
+        return rows
+
     def search(self, q):
         out = self.req("GET", "/search", {"q": q, "type": "track", "limit": 10})
         return [norm_track(t) for t in out["tracks"]["items"]]
@@ -355,6 +370,7 @@ class Mock:
                 self.lib[tid] = t
             self.pls.append({"id": f"pl{i}", "uri": f"mock:pl{i}", "name": pname, "tracks": tracks})
         self.queue = list(self.pls[0]["tracks"])
+        self.played = [self.pls[1]["tracks"][i] for i in (4, 1, 7, 2, 9)]  # newest first
         self.cur = 0
         self.playing = False
         self.pos = 0.0
@@ -375,6 +391,7 @@ class Mock:
     def _advance(self, d, auto=False):
         if auto and self.rep == "track":
             return
+        self.played.insert(0, self.queue[self.cur])
         if self.shuf:
             self.cur = random.randrange(len(self.queue))
         else:
@@ -426,6 +443,14 @@ class Mock:
         self.cur = next(i for i, t in enumerate(self.queue) if t["id"] == track["id"])
         self.pos = 0
         self.playing = True
+
+    def history(self):
+        seen, rows = set(), []
+        for t in self.played:
+            if t["id"] not in seen:
+                seen.add(t["id"])
+                rows.append(t)
+        return rows
 
     def devices(self):
         return []
@@ -660,6 +685,12 @@ class App:
             self.bg(self.b.play_context, pl["uri"])
         self.bg(self.b.playlist_tracks, pl["id"], done=done, fail=fail)
 
+    def open_history(self):
+        def done(tr):
+            self.items, self.sel = tr, 0
+            self.list_kind, self.list_title, self.list_ctx, self.back = "tracks", "History (recently played)", None, None
+        self.bg(self.b.history, done=done)
+
     def search(self, q):
         self.recent = [q] + [r for r in self.recent if r.lower() != q.lower()][:19]
         try:
@@ -716,6 +747,8 @@ class App:
             self.act(self.b.repeat, s["repeat"])
         elif k == ord("d"):
             self.to_terminal()
+        elif k == ord("h"):
+            self.open_history()
         elif k == ord("l"):
             self.open_playlists()
         elif k == ord("/"):
@@ -809,7 +842,7 @@ class App:
             self.put(scr, H - 2, 1, self.msg, curses.A_BOLD)
         elif self.daemon and self.daemon.status != "ready":
             self.put(scr, H - 2, 1, self.daemon.status, curses.A_DIM)
-        self.put(scr, H - 1, 0, " space play/pause  n/p track  ←/→ seek  +/- vol  s shuffle  r repeat  l lists  / search  d play here  q quit",
+        self.put(scr, H - 1, 0, " space play/pause  n/p track  ←/→ seek  +/- vol  s shuffle  r repeat  l lists  h history  / search  d play here  q quit",
                  curses.A_DIM)
         scr.refresh()
 

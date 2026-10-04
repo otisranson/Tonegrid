@@ -51,7 +51,8 @@ Create a free app at <https://developer.spotify.com/dashboard> with redirect URI
 | `←` / `→` | seek 5s | `↑↓` `j k` | move in list |
 | `+` / `-` | volume | enter | open / play |
 | `s` / `r` | shuffle / repeat | backspace | back |
-| `d` | play in this terminal | `/` | search (recent searches shown, ↑↓ to pick) |
+| `d` | play in this terminal | `h` | history (recently played) |
+| | | `/` | search (recent searches shown, ↑↓ to pick) |
 
 ## Notes
 
