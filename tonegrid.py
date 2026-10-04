@@ -256,8 +256,11 @@ class Spotify:
     def radio(self, artist):
         """Spotify's Web API has no radio endpoint: shuffle the artist, and spotifyd's
         autoplay carries on with similar music once it runs out."""
-        self.req("PUT", "/me/player/shuffle", {"state": "true"})
         self.put_json("/me/player/play", {}, {"context_uri": artist["uri"]})
+        try:  # best effort: some contexts (e.g. autoplay queues) refuse shuffle changes
+            self.req("PUT", "/me/player/shuffle", {"state": "true"})
+        except RuntimeError:
+            pass
 
     def image(self, url):
         try:
