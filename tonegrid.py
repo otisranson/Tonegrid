@@ -197,6 +197,9 @@ class Spotify:
         nxt = self.repeat_modes[(self.repeat_modes.index(cur) + 1) % 3]
         self.req("PUT", "/me/player/repeat", {"state": nxt})
 
+    def play_context(self, uri):
+        self.put_json("/me/player/play", {}, {"context_uri": uri})
+
     def play(self, track, context=None):
         if context:
             self.put_json("/me/player/play", {}, {"context_uri": context, "offset": {"uri": track["uri"]}})
@@ -208,10 +211,8 @@ class Spotify:
         return [{"id": p["id"], "uri": p["uri"], "name": p["name"]} for p in out["items"] if p]
 
     def playlist_tracks(self, pid):
-        try:  # endpoint was renamed; try the new name first
-            out = self.req("GET", f"/playlists/{pid}/items", {"limit": 100})
-        except RuntimeError:
-            out = self.req("GET", f"/playlists/{pid}/tracks", {"limit": 100})
+        # /tracks was removed in 2026 (403 in dev mode); only /items works
+        out = self.req("GET", f"/playlists/{pid}/items", {"limit": 100})
         rows = []
         for it in out["items"]:
             t = it.get("track") or it.get("item")
@@ -220,7 +221,7 @@ class Spotify:
         return rows
 
     def search(self, q):
-        out = self.req("GET", "/search", {"q": q, "type": "track", "limit": 30})
+        out = self.req("GET", "/search", {"q": q, "type": "track", "limit": 10})
         return [norm_track(t) for t in out["tracks"]["items"]]
 
     def image(self, url):
@@ -325,6 +326,10 @@ class Mock:
         self.pos = 0
         self.playing = True
 
+    def play_context(self, uri):
+        pl = next(p for p in self.pls if p["uri"] == uri)
+        self.play(pl["tracks"][0], uri)
+
     def playlists(self):
         return [{k: p[k] for k in ("id", "uri", "name")} for p in self.pls]
 
@@ -333,7 +338,7 @@ class Mock:
 
     def search(self, q):
         q = q.lower()
-        return [t for t in self.lib.values() if q in (t["name"] + " " + t["artists"] + " " + t["album"]).lower()][:30]
+        return [t for t in self.lib.values() if q in (t["name"] + " " + t["artists"] + " " + t["album"]).lower()][:10]
 
     def image(self, url):
         return None
@@ -439,14 +444,17 @@ class App:
         self.prompt = None
         self.alive = True
 
-    def bg(self, fn, *a, done=None):
+    def bg(self, fn, *a, done=None, fail=None):
         def run():
             try:
                 r = fn(*a)
                 if done:
                     done(r)
             except Exception as e:
-                self.msg = str(e)[:120]
+                if fail:
+                    fail(e)
+                else:
+                    self.msg = str(e)[:120]
         threading.Thread(target=run, daemon=True).start()
 
     def poll(self):
@@ -495,7 +503,11 @@ class App:
             self.items, self.sel = tr, 0
             self.list_kind, self.list_title, self.list_ctx = "tracks", pl["name"], pl["uri"]
             self.back = self.open_playlists
-        self.bg(self.b.playlist_tracks, pl["id"], done=done)
+        def fail(e):
+            # Spotify dev-mode apps can't read tracks of playlists you don't own
+            self.msg = f"Can't list tracks ({str(e)[:60]}) - playing the playlist instead"
+            self.bg(self.b.play_context, pl["uri"])
+        self.bg(self.b.playlist_tracks, pl["id"], done=done, fail=fail)
 
     def search(self, q):
         def done(tr):
