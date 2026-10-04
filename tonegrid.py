@@ -246,8 +246,15 @@ class Spotify:
         return rows
 
     def search(self, q):
-        out = self.req("GET", "/search", {"q": q, "type": "track", "limit": 10})
-        return [norm_track(t) for t in out["tracks"]["items"]]
+        out = self.req("GET", "/search", {"q": q, "type": "artist", "limit": 10})  # dev-mode cap is 10
+        return [{"id": a["id"], "uri": a["uri"], "name": a["name"], "genres": a.get("genres") or []}
+                for a in out["artists"]["items"] if a]
+
+    def radio(self, artist):
+        """Spotify's Web API has no radio endpoint: shuffle the artist, and spotifyd's
+        autoplay carries on with similar music once it runs out."""
+        self.req("PUT", "/me/player/shuffle", {"state": "true"})
+        self.put_json("/me/player/play", {}, {"context_uri": artist["uri"]})
 
     def image(self, url):
         try:
@@ -314,7 +321,7 @@ class Daemon:
                 logf = open(self.log, "ab")
                 self.proc = subprocess.Popen(
                     [b, "--no-daemon", "-c", str(self.cache), "-d", self.NAME, "-b", "pulseaudio",
-                     "--disable-discovery", "--initial-volume", "70"],
+                     "--disable-discovery", "--autoplay=true", "--initial-volume", "70"],
                     stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, env=self.env(),
                     start_new_session=True)  # own session: ^C reaches us, we stop it deliberately
                 self.status = "starting"
@@ -470,7 +477,16 @@ class Mock:
 
     def search(self, q):
         q = q.lower()
-        return [t for t in self.lib.values() if q in (t["name"] + " " + t["artists"] + " " + t["album"]).lower()][:10]
+        return [{"id": "a" + n.replace(" ", ""), "uri": "mock:artist:" + n, "name": n, "genres": []}
+                for n in self.ARTISTS if q in n.lower()][:10]
+
+    def radio(self, artist):
+        self._tick()
+        mine = [t for t in self.lib.values() if t["artists"] == artist["name"]]
+        others = random.sample([t for t in self.lib.values() if t["artists"] != artist["name"]], 6)
+        self.queue = mine + others
+        random.shuffle(self.queue)
+        self.shuf, self.cur, self.pos, self.playing = True, 0, 0, True
 
     def image(self, url):
         return None
@@ -701,7 +717,9 @@ class App:
 
         def done(tr):
             self.items, self.sel = tr, 0
-            self.list_kind, self.list_title, self.list_ctx, self.back = "tracks", f'Search: "{q}"', None, None
+            self.list_kind, self.list_title, self.list_ctx, self.back = "artists", f'Artists: "{q}"  (enter starts radio)', None, None
+            if not tr:
+                self.msg = f'No artists found for "{q}"'
         self.bg(self.b.search, q, done=done)
 
     def key(self, k):
@@ -754,7 +772,7 @@ class App:
         elif k == ord("/"):
             self.prompt = ""
             self.items, self.sel, self.list_kind, self.back = list(self.recent), -1, "recent", None
-            self.list_title = "Recent searches (up/down to pick, enter to search)" if self.recent else "Type a search"
+            self.list_title = "Recent artists (up/down to pick, enter to search)" if self.recent else "Type an artist name"
         elif k in (curses.KEY_DOWN, ord("j")) and self.items:
             self.sel = min(len(self.items) - 1, self.sel + 1)
         elif k in (curses.KEY_UP, ord("k")) and self.items:
@@ -765,6 +783,9 @@ class App:
             it = self.items[self.sel]
             if self.list_kind == "recent":
                 self.search(it)
+            elif self.list_kind == "artists":
+                self.msg = f"Starting {it['name']} radio..."
+                self.act(self.b.radio, it, optimistic={"shuffle": True})
             elif self.list_kind == "playlists":
                 self.open_tracks(it)
             else:
@@ -830,6 +851,8 @@ class App:
                 idx = start + i
                 if self.list_kind == "recent":
                     label = it
+                elif self.list_kind == "artists":
+                    label = it["name"] + (f"  [{', '.join(it['genres'][:3])}]" if it["genres"] else "")
                 elif self.list_kind == "playlists":
                     label = it["name"]
                 else:
@@ -837,12 +860,12 @@ class App:
                 self.put(scr, top + 2 + i, 1, ("> " if idx == self.sel else "  ") + label,
                          curses.A_REVERSE if idx == self.sel else 0)
         if self.prompt is not None:
-            self.put(scr, H - 2, 1, "search: " + self.prompt + "_", bold)
+            self.put(scr, H - 2, 1, "artist: " + self.prompt + "_", bold)
         elif self.msg:
             self.put(scr, H - 2, 1, self.msg, curses.A_BOLD)
         elif self.daemon and self.daemon.status != "ready":
             self.put(scr, H - 2, 1, self.daemon.status, curses.A_DIM)
-        self.put(scr, H - 1, 0, " space play/pause  n/p track  ←/→ seek  +/- vol  s shuffle  r repeat  l lists  h history  / search  d play here  q quit",
+        self.put(scr, H - 1, 0, " space play/pause  n/p track  ←/→ seek  +/- vol  s shuffle  r repeat  l lists  h history  / artist radio  d play here  q quit",
                  curses.A_DIM)
         scr.refresh()
 

@@ -8,7 +8,7 @@ A Spotify terminal client with ASCII art. One Python file, standard library only
 
 **Live demo (mock library, runs in your browser):** https://otisranson.github.io/Tonegrid/
 
-- Full-screen curses player: animated ASCII art, progress bar, spectrum bars, playlists, search
+- Full-screen curses player: animated ASCII art, progress bar, spectrum bars, playlists, artist radio
 - Album art rendered as ASCII when [Pillow](https://pypi.org/project/Pillow/) is installed; otherwise a plasma generated from the track id
 - OAuth with PKCE, so there is no client secret to store
 - `tonegrid --demo` runs against an offline mock library, so you can try it without an account
@@ -56,9 +56,11 @@ Create a free app at <https://developer.spotify.com/dashboard> with redirect URI
 | `+` / `-` | volume | enter | open / play |
 | `s` / `r` | shuffle / repeat | backspace | back |
 | `d` | play in this terminal | `h` | history (recently played) |
-| | | `/` | search (recent searches shown, ↑↓ to pick) |
+| | | `/` | artist radio: search an artist, enter starts it (recent artists shown, ↑↓ to pick) |
 
 ## Notes
+
+- **Artist radio** is a best effort. Spotify's Web API has no radio endpoint, so Tonegrid shuffles the artist and, when you use the built-in player, spotifyd's autoplay carries on with similar music after it runs out. On other devices Spotify's own autoplay setting decides what follows.
 
 - The spectrum bars are decorative, seeded from the track id. Spotify does not expose live audio to third-party apps.
 - Tested against the mock backend only; the live Spotify calls follow the public Web API but have not been exercised against a real account.
