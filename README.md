@@ -18,6 +18,25 @@ python3 tonegrid.py                         # player
 python3 tonegrid.py now                     # print current track as ASCII art
 ```
 
+## Play audio in the terminal (spotifyd)
+
+Spotify's Web API is a remote control, so something has to actually play the audio. Tonegrid
+starts [spotifyd](https://docs.spotifyd.rs) for you as a child process, which shows up in Spotify
+as a device called "tonegrid", and stops it when you quit.
+
+1. Install spotifyd (the `default` Linux build works) and put it on your PATH or in `~/.local/bin`.
+   On Linux it needs PulseAudio client libraries (`sudo apt install libpulse0`); on WSL2 audio
+   goes through WSLg.
+2. Once: `python3 tonegrid.py setup` (spotifyd's own browser login; needs Premium).
+3. Run `python3 tonegrid.py`. If nothing else is playing, Tonegrid claims playback for the terminal.
+   Press `d` to move playback to the terminal at any time.
+
+If spotifyd is missing, not set up, or crashes, Tonegrid keeps running as a remote control and
+shows the reason on the bottom line (`d` restarts it). Its log is `~/.config/tonegrid/spotifyd.log`.
+`--no-player` skips the daemon entirely.
+
+## Spotify app setup
+
 Create a free app at <https://developer.spotify.com/dashboard> with redirect URI
 `http://127.0.0.1:8888/callback`, and use its client id. Playback control needs
 **Spotify Premium** and an active device (open any Spotify app once). Tokens are stored in
@@ -32,6 +51,7 @@ Create a free app at <https://developer.spotify.com/dashboard> with redirect URI
 | `←` / `→` | seek 5s | `↑↓` `j k` | move in list |
 | `+` / `-` | volume | enter | open / play |
 | `s` / `r` | shuffle / repeat | backspace | back |
+| `d` | play in this terminal | | |
 
 ## Notes
 

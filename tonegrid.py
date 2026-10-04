@@ -21,6 +21,9 @@ import math
 import os
 import random
 import secrets
+import shutil
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -197,6 +200,12 @@ class Spotify:
         nxt = self.repeat_modes[(self.repeat_modes.index(cur) + 1) % 3]
         self.req("PUT", "/me/player/repeat", {"state": nxt})
 
+    def devices(self):
+        return (self.req("GET", "/me/player/devices") or {}).get("devices", [])
+
+    def transfer(self, device_id, play=False):
+        self.put_json("/me/player", {}, {"device_ids": [device_id], "play": play})
+
     def play_context(self, uri):
         self.put_json("/me/player/play", {}, {"context_uri": uri})
 
@@ -230,6 +239,97 @@ class Spotify:
                 return r.read()
         except Exception:
             return None
+
+
+# --------------------------------------------------------------------------
+# spotifyd: a headless Spotify Connect device so audio plays from the terminal
+# --------------------------------------------------------------------------
+
+class Daemon:
+    """Owns a spotifyd child process. Never raises: problems become `status`,
+    and Tonegrid keeps working as a remote control for other devices."""
+    NAME = "tonegrid"
+
+    def __init__(self):
+        self.cache = CONF.parent / "spotifyd"
+        self.log = CONF.parent / "spotifyd.log"
+        self.proc = None
+        self.status = "starting"
+
+    @staticmethod
+    def binary():
+        return (os.environ.get("TONEGRID_SPOTIFYD") or shutil.which("spotifyd")
+                or next((str(p) for p in [Path.home() / ".local/bin/spotifyd"] if p.exists()), None))
+
+    @staticmethod
+    def env():
+        env = dict(os.environ)
+        libs = Path.home() / ".local/share/tonegrid/lib"  # optional bundled libpulse, no root needed
+        if libs.is_dir():
+            env["LD_LIBRARY_PATH"] = ":".join(filter(None, [str(libs), str(libs / "pulseaudio"),
+                                                            env.get("LD_LIBRARY_PATH")]))
+        return env
+
+    def authed(self):
+        return (self.cache / "oauth" / "credentials.json").exists()
+
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def setup(self):
+        """One-time login for the daemon (spotifyd's own OAuth, no dashboard app needed)."""
+        b = self.binary()
+        if not b:
+            sys.exit("spotifyd not found. Install it first (see README).")
+        self.cache.mkdir(parents=True, exist_ok=True)
+        subprocess.call([b, "authenticate", "-c", str(self.cache)], env=self.env())
+
+    def start(self):
+        if self.running():
+            return True
+        b = self.binary()
+        if not b:
+            self.status = "spotifyd not installed - controlling other devices only"
+        elif not self.authed():
+            self.status = "terminal player not set up - run: tonegrid.py setup"
+        else:
+            try:
+                self.cache.mkdir(parents=True, exist_ok=True)
+                logf = open(self.log, "ab")
+                self.proc = subprocess.Popen(
+                    [b, "--no-daemon", "-c", str(self.cache), "-d", self.NAME, "-b", "pulseaudio",
+                     "--disable-discovery", "--initial-volume", "70"],
+                    stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, env=self.env(),
+                    start_new_session=True)  # own session: ^C reaches us, we stop it deliberately
+                self.status = "starting"
+                return True
+            except OSError as e:
+                self.status = f"could not start spotifyd: {e}"
+        return False
+
+    def check(self):
+        """Call periodically; reports a crash instead of dying with it."""
+        if self.proc is not None and self.proc.poll() is not None:
+            code, self.proc = self.proc.returncode, None
+            tail = ""
+            try:
+                tail = self.log.read_text(errors="replace").strip().splitlines()[-1][:80]
+            except Exception:
+                pass
+            self.status = f"terminal player stopped (exit {code}) - press d to restart. {tail}"
+        elif self.running() and self.status == "starting":
+            self.status = "starting"
+
+    def stop(self):
+        p, self.proc = self.proc, None
+        if p is None or p.poll() is not None:
+            return
+        p.terminate()
+        try:
+            p.wait(3)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
 
 
 class Mock:
@@ -325,6 +425,12 @@ class Mock:
         self.cur = next(i for i, t in enumerate(self.queue) if t["id"] == track["id"])
         self.pos = 0
         self.playing = True
+
+    def devices(self):
+        return []
+
+    def transfer(self, device_id, play=False):
+        pass
 
     def play_context(self, uri):
         pl = next(p for p in self.pls if p["uri"] == uri)
@@ -429,8 +535,10 @@ def fmt_ms(ms):
 # --------------------------------------------------------------------------
 
 class App:
-    def __init__(self, backend):
+    def __init__(self, backend, daemon=None):
         self.b = backend
+        self.daemon = daemon
+        self.dev_id = None
         self.st = None
         self.st_at = time.time()
         self.msg = ""
@@ -457,8 +565,46 @@ class App:
                     self.msg = str(e)[:120]
         threading.Thread(target=run, daemon=True).start()
 
+    def find_device(self):
+        """Wait for our spotifyd to register, then claim playback if nothing is active."""
+        for _ in range(40):
+            if not self.alive or not self.daemon.running():
+                return
+            try:
+                for d in self.b.devices():
+                    if d["name"] == Daemon.NAME:
+                        self.dev_id = d["id"]
+                        self.daemon.status = "ready"
+                        if not self.st:
+                            self.b.transfer(self.dev_id)
+                        return
+            except Exception:
+                pass
+            time.sleep(1)
+        if self.daemon.running():
+            self.daemon.status = "terminal player did not register with Spotify - see spotifyd.log"
+
+    def start_daemon(self):
+        if self.daemon and self.daemon.start():
+            self.bg(self.find_device)
+
+    def to_terminal(self):
+        if not self.daemon:
+            return
+        if not self.daemon.running():
+            self.dev_id = None
+            self.start_daemon()
+            self.msg = "restarting terminal player..."
+        elif self.dev_id:
+            self.msg = "playing in this terminal"
+            self.bg(self.b.transfer, self.dev_id, bool(self.st and self.st["playing"]))
+        else:
+            self.msg = "terminal player still starting"
+
     def poll(self):
         while self.alive:
+            if self.daemon:
+                self.daemon.check()
             try:
                 s = self.b.state()
                 self.st, self.st_at = s, time.time()
@@ -553,6 +699,8 @@ class App:
             self.act(self.b.shuffle, not s["shuffle"], optimistic={"shuffle": not s["shuffle"]})
         elif k == ord("r") and s:
             self.act(self.b.repeat, s["repeat"])
+        elif k == ord("d"):
+            self.to_terminal()
         elif k == ord("l"):
             self.open_playlists()
         elif k == ord("/"):
@@ -638,12 +786,14 @@ class App:
             self.put(scr, H - 2, 1, "search: " + self.prompt + "_", bold)
         elif self.msg:
             self.put(scr, H - 2, 1, self.msg, curses.A_BOLD)
-        self.put(scr, H - 1, 0, " space play/pause  n/p track  ←/→ seek  +/- vol  s shuffle  r repeat  l lists  / search  q quit",
+        elif self.daemon and self.daemon.status != "ready":
+            self.put(scr, H - 2, 1, self.daemon.status, curses.A_DIM)
+        self.put(scr, H - 1, 0, " space play/pause  n/p track  ←/→ seek  +/- vol  s shuffle  r repeat  l lists  / search  d play here  q quit",
                  curses.A_DIM)
         scr.refresh()
 
 
-def tui(scr, backend):
+def tui(scr, backend, daemon=None):
     locale.setlocale(locale.LC_ALL, "")
     curses.curs_set(0)
     curses.use_default_colors()
@@ -652,7 +802,8 @@ def tui(scr, backend):
         curses.init_pair(1, curses.COLOR_GREEN, -1)
     scr.timeout(80)
     scr.keypad(True)
-    app = App(backend)
+    app = App(backend, daemon)
+    app.start_daemon()
     threading.Thread(target=app.poll, daemon=True).start()
     app.open_playlists()
     while app.alive:
@@ -679,9 +830,10 @@ def cmd_now(backend):
 
 def main():
     ap = argparse.ArgumentParser(prog="tonegrid", description="Spotify in your terminal, in ASCII.")
-    ap.add_argument("cmd", nargs="?", default="play", choices=["play", "now", "login", "logout"])
+    ap.add_argument("cmd", nargs="?", default="play", choices=["play", "now", "login", "logout", "setup"])
     ap.add_argument("--client-id", help="Spotify app client id (for `login`)")
     ap.add_argument("--demo", action="store_true", help="offline mock library")
+    ap.add_argument("--no-player", action="store_true", help="don't start spotifyd; control other devices only")
     a = ap.parse_args()
     if a.cmd == "login":
         cid = a.client_id or os.environ.get("SPOTIFY_CLIENT_ID")
@@ -689,6 +841,8 @@ def main():
             sys.exit("Pass --client-id (create a free app at developer.spotify.com/dashboard "
                      f"with redirect URI {REDIRECT})")
         return login(cid)
+    if a.cmd == "setup":
+        return Daemon().setup()
     if a.cmd == "logout":
         CONF.unlink(missing_ok=True)
         return print("Logged out.")
@@ -697,10 +851,16 @@ def main():
         backend.toggle(False)
     if a.cmd == "now":
         return cmd_now(backend)
+    daemon = None if (a.demo or a.no_player) else Daemon()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
     try:
-        curses.wrapper(tui, backend)
+        curses.wrapper(tui, backend, daemon)
     except KeyboardInterrupt:
         pass
+    finally:
+        if daemon:
+            daemon.stop()  # also covers crashes and closed terminals
 
 
 if __name__ == "__main__":
