@@ -148,7 +148,10 @@ class Spotify:
         try:
             with urllib.request.urlopen(r, timeout=15) as resp:
                 body = resp.read()
-                return json.loads(body) if body else None
+                # Player commands answer 200/202/204 with empty or non-JSON bodies
+                if body and "json" in resp.headers.get("Content-Type", ""):
+                    return json.loads(body)
+                return None
         except urllib.error.HTTPError as e:
             if e.code == 401 and retry:
                 access_token(force=True)
